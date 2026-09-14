@@ -26,15 +26,16 @@ const useExplorerStore = create<ExplorerState>((set) => ({
   setMeta: (meta) => set({ meta }),
 }));
 
+// Soft pastel radiology colors
 const ORGAN_COLORS: Record<string, string> = {
-  liver: '#E2849D',
-  spleen: '#BBA8E0',
-  stomach: '#F5AC8E',
-  kidney_right: '#FF7F70',
-  kidney_left: '#F76B66',
-  aorta: '#FF5C7E',
-  inferior_vena_cava: '#9BB8F5',
-  spine: '#FFF6E5',
+  liver: '#E890A5',
+  spleen: '#C2B0E8',
+  stomach: '#F7B499',
+  kidney_right: '#FF8878',
+  kidney_left: '#F9736E',
+  aorta: '#FF5E82',
+  inferior_vena_cava: '#9CB9F8',
+  spine: '#FFF6E8',
 };
 
 function OrganModel({ name }: { name: string }) {
@@ -45,17 +46,20 @@ function OrganModel({ name }: { name: string }) {
   const cloned = useMemo(() => {
     const c = scene.clone();
     const hex = ORGAN_COLORS[name] || '#ffffff';
+
     c.traverse((child: any) => {
-      if (child.isMesh) {
-        // Recompute normals in case the GLB exported without them
-        if (child.geometry) {
-          child.geometry.computeVertexNormals();
-        }
-        // Use MeshLambertMaterial with double-sided rendering for bright, vibrant anatomical surfaces
-        child.material = new THREE.MeshLambertMaterial({
+      if (child.isMesh && child.geometry) {
+        // Force accurate surface normals to create true 3D contour shadows & highlights
+        child.geometry.computeVertexNormals();
+
+        // MeshPhongMaterial provides distinct specular highlights and 3D volume
+        child.material = new THREE.MeshPhongMaterial({
           color: new THREE.Color(hex),
+          emissive: isSelected ? new THREE.Color(hex).multiplyScalar(0.45) : new THREE.Color(0x11080d),
+          specular: new THREE.Color(0xffffff),
+          shininess: isSelected ? 80 : 35,
           transparent: true,
-          opacity: isSelected || !selectedOrgan ? 0.95 : 0.25,
+          opacity: isSelected ? 1.0 : selectedOrgan ? 0.22 : 0.85,
           side: THREE.DoubleSide,
         });
       }
@@ -89,13 +93,13 @@ function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal
   const { meta, crosshair, setCrosshair } = useExplorerStore();
   const isDragging = useRef(false);
 
-  const updateCoordsFromMouse = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const updateCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!meta || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const [ni, nj, nk] = meta.shape;
 
-    let width = (type === 'axial' || type === 'coronal') ? ni : nj;
-    let height = (type === 'axial') ? nj : nk;
+    const width = (type === 'axial' || type === 'coronal') ? ni : nj;
+    const height = (type === 'axial') ? nj : nk;
 
     const x = Math.floor(((e.clientX - rect.left) / rect.width) * width);
     const y = Math.floor(((e.clientY - rect.top) / rect.height) * height);
@@ -179,9 +183,9 @@ function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal
     }
     ctx.putImageData(imgData, 0, 0);
 
-    // Pink radiology crosshairs
+    // Crosshair overlay
     ctx.strokeStyle = '#E8447A';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
     if (type === 'axial') {
       const cx = ni - 1 - ci;
@@ -217,7 +221,9 @@ function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal
         position: 'relative',
         width: '100%',
         height: '100%',
-        background: '#0B0609',
+        minWidth: 0,
+        minHeight: 0,
+        background: '#090407',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -226,8 +232,8 @@ function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal
     >
       <canvas
         ref={canvasRef}
-        onMouseDown={(e) => { isDragging.current = true; updateCoordsFromMouse(e); }}
-        onMouseMove={(e) => { if (isDragging.current) updateCoordsFromMouse(e); }}
+        onMouseDown={(e) => { isDragging.current = true; updateCoords(e); }}
+        onMouseMove={(e) => { if (isDragging.current) updateCoords(e); }}
         onMouseUp={() => { isDragging.current = false; }}
         onMouseLeave={() => { isDragging.current = false; }}
         style={{
@@ -277,8 +283,8 @@ export default function Page() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', background: '#1A0D14', color: '#FCE4EC', overflow: 'hidden' }}>
-      {/* Sidebar */}
-      <aside style={{ width: 220, minWidth: 220, borderRight: '1px solid #3A1C2B', padding: 16, background: '#2A1520', display: 'flex', flexDirection: 'column', gap: 6, boxSizing: 'border-box' }}>
+      {/* Organ List Sidebar */}
+      <aside style={{ width: 230, minWidth: 230, borderRight: '1px solid #3A1C2B', padding: 16, background: '#2A1520', display: 'flex', flexDirection: 'column', gap: 6, boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: 15, fontWeight: 'bold', margin: '0 0 10px 0', color: '#E8447A' }}>Organs</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto' }}>
           {visibleOrgans.map((name) => (
@@ -293,34 +299,38 @@ export default function Page() {
               }}
               style={{
                 textAlign: 'left',
-                padding: '8px 10px',
-                borderRadius: 4,
+                padding: '8px 12px',
+                borderRadius: 5,
                 background: selectedOrgan === name ? '#E8447A' : 'transparent',
                 color: selectedOrgan === name ? '#FFFFFF' : '#FCE4EC',
                 border: '1px solid #3A1C2B',
                 cursor: 'pointer',
                 fontSize: 13,
+                fontWeight: selectedOrgan === name ? 600 : 400,
                 textTransform: 'capitalize',
+                transition: 'all 0.15s ease',
               }}
             >
               {name.replace(/_/g, ' ')}
             </button>
           ))}
         </div>
-        <div style={{ marginTop: 'auto', fontSize: 10, color: '#C9A9B4', borderTop: '1px solid #3A1C2B', paddingTop: 8 }}>
+        <div style={{ marginTop: 'auto', fontSize: 10, color: '#C9A9B4', borderTop: '1px solid #3A1C2B', paddingTop: 8, lineHeight: 1.4 }}>
           TotalSegmentator CT data (CC BY 4.0). For learning only, not for diagnosis.
         </div>
       </aside>
 
-      {/* Symmetrical 2x2 Grid Viewport */}
-      <main style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 2, background: '#3A1C2B', height: '100vh', boxSizing: 'border-box' }}>
-        <div style={{ background: '#1A0D14', position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
-          <Canvas camera={{ position: [0, -40, 360], fov: 45 }}>
-            <ambientLight intensity={1.8} />
-            <directionalLight position={[100, 150, 100]} intensity={2.5} />
-            <directionalLight position={[-100, -150, -100]} intensity={1.8} />
-            <hemisphereLight groundColor="#2A1520" intensity={1.2} />
-            <OrbitControls />
+      {/* 2x2 Viewport Matrix */}
+      <main style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 2, background: '#3A1C2B', height: '100vh', width: 'calc(100vw - 230px)', boxSizing: 'border-box', overflow: 'hidden' }}>
+        {/* 3D Anatomical Canvas */}
+        <div style={{ background: '#1A0D14', position: 'relative', width: '100%', height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+          <Canvas camera={{ position: [120, -180, 280], fov: 45, up: [0, 0, 1] }}>
+            {/* Multi-angle cinematic key & fill lights */}
+            <ambientLight intensity={1.4} />
+            <directionalLight position={[200, 300, 400]} intensity={2.8} />
+            <directionalLight position={[-200, -300, 200]} intensity={1.5} color="#E890A5" />
+            <pointLight position={[0, 0, 300]} intensity={2.0} />
+            <OrbitControls enableDamping dampingFactor={0.05} />
             {meta && visibleOrgans.map((name) => (
               <OrganModel key={name} name={name} />
             ))}
