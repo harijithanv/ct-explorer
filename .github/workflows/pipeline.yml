@@ -1,0 +1,36 @@
+name: Generate Assets
+on: [workflow_dispatch]
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Tools
+        run: pip install nibabel numpy scikit-image trimesh fast-simplification pillow
+
+      - name: Download & Unpack Dataset
+        run: |
+          mkdir -p data/raw
+          curl -L -o data/raw/small.zip "https://zenodo.org/records/10047263/files/Totalsegmentator_dataset_small_v201.zip?download=1"
+          unzip -q data/raw/small.zip -d data/raw/
+          rm data/raw/small.zip
+
+      - name: Run Pipeline
+        run: |
+          python pipeline/pick_subject.py
+          python pipeline/build_assets.py
+
+      - name: Save Assets
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add -f web/public/data/
+          git commit -m "Add processed CT assets (<20MB)"
+          git push
