@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
@@ -27,14 +27,14 @@ const useExplorerStore = create<ExplorerState>((set) => ({
 }));
 
 const ORGAN_COLORS: Record<string, string> = {
-  liver: '#D88A9C',
-  spleen: '#B6A6D3',
-  stomach: '#E6A88E',
-  kidney_right: '#EB7A6F',
-  kidney_left: '#E5625E',
-  aorta: '#F05D7A',
-  inferior_vena_cava: '#9CB2E0',
-  spine: '#F4ECE1',
+  liver: '#E2849D',
+  spleen: '#BBA8E0',
+  stomach: '#F5AC8E',
+  kidney_right: '#FF7F70',
+  kidney_left: '#F76B66',
+  aorta: '#FF5C7E',
+  inferior_vena_cava: '#9BB8F5',
+  spine: '#FFF6E5',
 };
 
 function OrganModel({ name }: { name: string }) {
@@ -42,15 +42,18 @@ function OrganModel({ name }: { name: string }) {
   const { selectedOrgan, setSelectedOrgan, setCrosshair, meta } = useExplorerStore();
   const isSelected = selectedOrgan === name;
 
-  const cloned = React.useMemo(() => {
+  const cloned = useMemo(() => {
     const c = scene.clone();
     const hex = ORGAN_COLORS[name] || '#ffffff';
     c.traverse((child: any) => {
       if (child.isMesh) {
-        child.material = new THREE.MeshStandardMaterial({
+        // Recompute normals in case the GLB exported without them
+        if (child.geometry) {
+          child.geometry.computeVertexNormals();
+        }
+        // Use MeshLambertMaterial with double-sided rendering for bright, vibrant anatomical surfaces
+        child.material = new THREE.MeshLambertMaterial({
           color: new THREE.Color(hex),
-          roughness: 0.35,
-          metalness: 0.1,
           transparent: true,
           opacity: isSelected || !selectedOrgan ? 0.95 : 0.25,
           side: THREE.DoubleSide,
@@ -176,7 +179,7 @@ function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal
     }
     ctx.putImageData(imgData, 0, 0);
 
-    // Draw crosshair lines
+    // Pink radiology crosshairs
     ctx.strokeStyle = '#E8447A';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -210,7 +213,16 @@ function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal
   return (
     <div
       onWheel={handleWheel}
-      style={{ position: 'relative', width: '100%', height: '100%', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        background: '#0B0609',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+      }}
     >
       <canvas
         ref={canvasRef}
@@ -218,12 +230,18 @@ function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal
         onMouseMove={(e) => { if (isDragging.current) updateCoordsFromMouse(e); }}
         onMouseUp={() => { isDragging.current = false; }}
         onMouseLeave={() => { isDragging.current = false; }}
-        style={{ maxWidth: '100%', maxHeight: '100%', cursor: 'crosshair', imageRendering: 'pixelated' }}
+        style={{
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          cursor: 'crosshair',
+          imageRendering: 'pixelated',
+        }}
       />
-      <div style={{ position: 'absolute', bottom: 8, left: 8, fontSize: 11, color: '#C9A9B4', background: 'rgba(0,0,0,0.7)', padding: '2px 6px', borderRadius: 3 }}>
+      <div style={{ position: 'absolute', bottom: 8, left: 8, fontSize: 11, color: '#C9A9B4', background: 'rgba(26,13,20,0.85)', padding: '2px 8px', borderRadius: 4, border: '1px solid #3A1C2B' }}>
         {type.toUpperCase()} • Slice {sliceIndex + 1}/{sliceMax}
       </div>
-      <div style={{ position: 'absolute', top: 8, right: 8, fontSize: 10, color: '#8E7380' }}>
+      <div style={{ position: 'absolute', top: 8, right: 8, fontSize: 10, color: '#8E7380', background: 'rgba(26,13,20,0.7)', padding: '2px 6px', borderRadius: 3 }}>
         Scroll to scrub
       </div>
     </div>
@@ -260,52 +278,54 @@ export default function Page() {
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', background: '#1A0D14', color: '#FCE4EC', overflow: 'hidden' }}>
       {/* Sidebar */}
-      <aside style={{ width: 220, borderRight: '1px solid #3A1C2B', padding: 16, background: '#2A1520', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <aside style={{ width: 220, minWidth: 220, borderRight: '1px solid #3A1C2B', padding: 16, background: '#2A1520', display: 'flex', flexDirection: 'column', gap: 6, boxSizing: 'border-box' }}>
         <h2 style={{ fontSize: 15, fontWeight: 'bold', margin: '0 0 10px 0', color: '#E8447A' }}>Organs</h2>
-        {visibleOrgans.map((name) => (
-          <button
-            key={name}
-            onClick={() => {
-              setSelectedOrgan(name);
-              if (meta?.labels) {
-                const item = Object.values(meta.labels).find((l: any) => l.name === name) as any;
-                if (item) setCrosshair([Math.round(item.centroid[0]), Math.round(item.centroid[1]), Math.round(item.centroid[2])]);
-              }
-            }}
-            style={{
-              textAlign: 'left',
-              padding: '7px 10px',
-              borderRadius: 4,
-              background: selectedOrgan === name ? '#E8447A' : 'transparent',
-              color: selectedOrgan === name ? '#FFFFFF' : '#FCE4EC',
-              border: '1px solid #3A1C2B',
-              cursor: 'pointer',
-              fontSize: 13,
-              textTransform: 'capitalize',
-            }}
-          >
-            {name.replace(/_/g, ' ')}
-          </button>
-        ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto' }}>
+          {visibleOrgans.map((name) => (
+            <button
+              key={name}
+              onClick={() => {
+                setSelectedOrgan(name);
+                if (meta?.labels) {
+                  const item = Object.values(meta.labels).find((l: any) => l.name === name) as any;
+                  if (item) setCrosshair([Math.round(item.centroid[0]), Math.round(item.centroid[1]), Math.round(item.centroid[2])]);
+                }
+              }}
+              style={{
+                textAlign: 'left',
+                padding: '8px 10px',
+                borderRadius: 4,
+                background: selectedOrgan === name ? '#E8447A' : 'transparent',
+                color: selectedOrgan === name ? '#FFFFFF' : '#FCE4EC',
+                border: '1px solid #3A1C2B',
+                cursor: 'pointer',
+                fontSize: 13,
+                textTransform: 'capitalize',
+              }}
+            >
+              {name.replace(/_/g, ' ')}
+            </button>
+          ))}
+        </div>
         <div style={{ marginTop: 'auto', fontSize: 10, color: '#C9A9B4', borderTop: '1px solid #3A1C2B', paddingTop: 8 }}>
           TotalSegmentator CT data (CC BY 4.0). For learning only, not for diagnosis.
         </div>
       </aside>
 
-      {/* Grid */}
-      <main style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 2, background: '#3A1C2B' }}>
-        <div style={{ background: '#1A0D14', position: 'relative' }}>
-          <Canvas camera={{ position: [0, 0, 350], fov: 45 }}>
+      {/* Symmetrical 2x2 Grid Viewport */}
+      <main style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 2, background: '#3A1C2B', height: '100vh', boxSizing: 'border-box' }}>
+        <div style={{ background: '#1A0D14', position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
+          <Canvas camera={{ position: [0, -40, 360], fov: 45 }}>
             <ambientLight intensity={1.8} />
-            <directionalLight position={[100, 100, 100]} intensity={2.5} />
-            <directionalLight position={[-100, -100, -100]} intensity={1.5} />
-            <directionalLight position={[0, 200, 0]} intensity={1.5} />
+            <directionalLight position={[100, 150, 100]} intensity={2.5} />
+            <directionalLight position={[-100, -150, -100]} intensity={1.8} />
+            <hemisphereLight groundColor="#2A1520" intensity={1.2} />
             <OrbitControls />
             {meta && visibleOrgans.map((name) => (
               <OrganModel key={name} name={name} />
             ))}
           </Canvas>
-          <div style={{ position: 'absolute', top: 10, left: 10, fontSize: 16, color: '#E8447A' }}>
+          <div style={{ position: 'absolute', top: 10, left: 10, fontSize: 15, color: '#E8447A', background: 'rgba(26,13,20,0.85)', padding: '3px 8px', borderRadius: 4, border: '1px solid #3A1C2B' }}>
             {selectedOrgan ? selectedOrgan.replace(/_/g, ' ') : '3D View'}
           </div>
         </div>
