@@ -3,9 +3,9 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
+import * as THREE from 'three';
 import { create } from 'zustand';
 
-// Zustand store for syncing 3D & 2D slices
 interface ExplorerState {
   crosshair: [number, number, number];
   selectedOrgan: string | null;
@@ -34,7 +34,7 @@ const ORGAN_COLORS: Record<string, string> = {
   kidney_left: '#E5625E',
   aorta: '#F05D7A',
   inferior_vena_cava: '#9CB2E0',
-  spine: '#FFF4E0',
+  spine: '#F4ECE1',
 };
 
 function OrganModel({ name }: { name: string }) {
@@ -42,30 +42,96 @@ function OrganModel({ name }: { name: string }) {
   const { selectedOrgan, setSelectedOrgan, setCrosshair, meta } = useExplorerStore();
   const isSelected = selectedOrgan === name;
 
+  const cloned = React.useMemo(() => {
+    const c = scene.clone();
+    const hex = ORGAN_COLORS[name] || '#ffffff';
+    c.traverse((child: any) => {
+      if (child.isMesh) {
+        child.material = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(hex),
+          roughness: 0.35,
+          metalness: 0.1,
+          transparent: true,
+          opacity: isSelected || !selectedOrgan ? 0.95 : 0.25,
+          side: THREE.DoubleSide,
+        });
+      }
+    });
+    return c;
+  }, [scene, name, isSelected, selectedOrgan]);
+
   return (
     <primitive
-      object={scene.clone()}
+      object={cloned}
       onClick={(e: any) => {
         e.stopPropagation();
         setSelectedOrgan(name);
         if (meta?.labels) {
           const item = Object.values(meta.labels).find((l: any) => l.name === name) as any;
-          if (item) setCrosshair([Math.round(item.centroid[0]), Math.round(item.centroid[1]), Math.round(item.centroid[2])]);
+          if (item) {
+            setCrosshair([
+              Math.round(item.centroid[0]),
+              Math.round(item.centroid[1]),
+              Math.round(item.centroid[2]),
+            ]);
+          }
         }
       }}
-    >
-      <meshStandardMaterial
-        color={ORGAN_COLORS[name] || '#ffffff'}
-        transparent
-        opacity={isSelected || !selectedOrgan ? 0.9 : 0.25}
-      />
-    </primitive>
+    />
   );
 }
 
-function SliceCanvas({ type, ctBuffer, labelsBuffer }: { type: 'axial' | 'coronal' | 'sagittal'; ctBuffer: Uint8Array | null; labelsBuffer: Uint8Array | null }) {
+function SliceCanvas({ type, ctBuffer }: { type: 'axial' | 'coronal' | 'sagittal'; ctBuffer: Uint8Array | null }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const { meta, crosshair, setCrosshair } = useExplorerStore();
+  const isDragging = useRef(false);
+
+  const updateCoordsFromMouse = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!meta || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const [ni, nj, nk] = meta.shape;
+
+    let width = (type === 'axial' || type === 'coronal') ? ni : nj;
+    let height = (type === 'axial') ? nj : nk;
+
+    const x = Math.floor(((e.clientX - rect.left) / rect.width) * width);
+    const y = Math.floor(((e.clientY - rect.top) / rect.height) * height);
+
+    let [ci, cj, ck] = crosshair;
+    if (type === 'axial') {
+      ci = ni - 1 - x;
+      cj = nj - 1 - y;
+    } else if (type === 'coronal') {
+      ci = ni - 1 - x;
+      ck = nk - 1 - y;
+    } else {
+      cj = nj - 1 - x;
+      ck = nk - 1 - y;
+    }
+
+    setCrosshair([
+      Math.max(0, Math.min(ni - 1, ci)),
+      Math.max(0, Math.min(nj - 1, cj)),
+      Math.max(0, Math.min(nk - 1, ck)),
+    ]);
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    if (!meta) return;
+    const [ni, nj, nk] = meta.shape;
+    const delta = e.deltaY > 0 ? 1 : -1;
+    let [ci, cj, ck] = crosshair;
+
+    if (type === 'axial') {
+      ck = Math.max(0, Math.min(nk - 1, ck + delta));
+    } else if (type === 'coronal') {
+      cj = Math.max(0, Math.min(nj - 1, cj + delta));
+    } else {
+      ci = Math.max(0, Math.min(ni - 1, ci + delta));
+    }
+    setCrosshair([ci, cj, ck]);
+  };
 
   useEffect(() => {
     if (!meta || !ctBuffer || !canvasRef.current) return;
@@ -74,15 +140,12 @@ function SliceCanvas({ type, ctBuffer, labelsBuffer }: { type: 'axial' | 'corona
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let width = 0, height = 0;
-    if (type === 'axial') { width = ni; height = nj; }
-    else if (type === 'coronal') { width = ni; height = nk; }
-    else { width = nj; height = nk; }
+    let width = (type === 'axial' || type === 'coronal') ? ni : nj;
+    let height = (type === 'axial') ? nj : nk;
 
     canvas.width = width;
     canvas.height = height;
     const imgData = ctx.createImageData(width, height);
-
     const [ci, cj, ck] = crosshair;
 
     for (let row = 0; row < height; row++) {
@@ -103,7 +166,7 @@ function SliceCanvas({ type, ctBuffer, labelsBuffer }: { type: 'axial' | 'corona
         }
 
         const idx = i * nj * nk + j * nk + k;
-        const val = ctBuffer[idx] || 0;
+        const val = ctBuffer[idx] !== undefined ? ctBuffer[idx] : 0;
         const pIdx = (row * width + col) * 4;
         imgData.data[pIdx] = val;
         imgData.data[pIdx + 1] = val;
@@ -112,13 +175,56 @@ function SliceCanvas({ type, ctBuffer, labelsBuffer }: { type: 'axial' | 'corona
       }
     }
     ctx.putImageData(imgData, 0, 0);
+
+    // Draw crosshair lines
+    ctx.strokeStyle = '#E8447A';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (type === 'axial') {
+      const cx = ni - 1 - ci;
+      const cy = nj - 1 - cj;
+      ctx.moveTo(cx, 0); ctx.lineTo(cx, height);
+      ctx.moveTo(0, cy); ctx.lineTo(width, cy);
+    } else if (type === 'coronal') {
+      const cx = ni - 1 - ci;
+      const cy = nk - 1 - ck;
+      ctx.moveTo(cx, 0); ctx.lineTo(cx, height);
+      ctx.moveTo(0, cy); ctx.lineTo(width, cy);
+    } else {
+      const cx = nj - 1 - cj;
+      const cy = nk - 1 - ck;
+      ctx.moveTo(cx, 0); ctx.lineTo(cx, height);
+      ctx.moveTo(0, cy); ctx.lineTo(width, cy);
+    }
+    ctx.stroke();
   }, [meta, crosshair, ctBuffer, type]);
 
+  let sliceIndex = 0;
+  let sliceMax = 0;
+  if (meta) {
+    if (type === 'axial') { sliceIndex = crosshair[2]; sliceMax = meta.shape[2]; }
+    else if (type === 'coronal') { sliceIndex = crosshair[1]; sliceMax = meta.shape[1]; }
+    else { sliceIndex = crosshair[0]; sliceMax = meta.shape[0]; }
+  }
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000' }}>
-      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-      <div style={{ position: 'absolute', bottom: 6, left: 6, fontSize: 11, color: '#C9A9B4' }}>
-        {type.toUpperCase()}
+    <div
+      onWheel={handleWheel}
+      style={{ position: 'relative', width: '100%', height: '100%', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    >
+      <canvas
+        ref={canvasRef}
+        onMouseDown={(e) => { isDragging.current = true; updateCoordsFromMouse(e); }}
+        onMouseMove={(e) => { if (isDragging.current) updateCoordsFromMouse(e); }}
+        onMouseUp={() => { isDragging.current = false; }}
+        onMouseLeave={() => { isDragging.current = false; }}
+        style={{ maxWidth: '100%', maxHeight: '100%', cursor: 'crosshair', imageRendering: 'pixelated' }}
+      />
+      <div style={{ position: 'absolute', bottom: 8, left: 8, fontSize: 11, color: '#C9A9B4', background: 'rgba(0,0,0,0.7)', padding: '2px 6px', borderRadius: 3 }}>
+        {type.toUpperCase()} • Slice {sliceIndex + 1}/{sliceMax}
+      </div>
+      <div style={{ position: 'absolute', top: 8, right: 8, fontSize: 10, color: '#8E7380' }}>
+        Scroll to scrub
       </div>
     </div>
   );
@@ -127,8 +233,6 @@ function SliceCanvas({ type, ctBuffer, labelsBuffer }: { type: 'axial' | 'corona
 export default function Page() {
   const { meta, setMeta, setCrosshair, selectedOrgan, setSelectedOrgan, visibleOrgans } = useExplorerStore();
   const [ctBuffer, setCtBuffer] = useState<Uint8Array | null>(null);
-  const [labelsBuffer, setLabelsBuffer] = useState<Uint8Array | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
@@ -137,23 +241,15 @@ export default function Page() {
         const metaJson = await metaRes.json();
         setMeta(metaJson);
 
-        const [ctRes, lblRes] = await Promise.all([
-          fetch('/data/ct.bin'),
-          fetch('/data/labels.bin'),
-        ]);
-
+        const ctRes = await fetch('/data/ct.bin');
         const ctBuf = await ctRes.arrayBuffer();
-        const lblBuf = await lblRes.arrayBuffer();
-
         setCtBuffer(new Uint8Array(ctBuf));
-        setLabelsBuffer(new Uint8Array(lblBuf));
 
         setCrosshair([
           Math.floor(metaJson.shape[0] / 2),
           Math.floor(metaJson.shape[1] / 2),
           Math.floor(metaJson.shape[2] / 2),
         ]);
-        setLoading(false);
       } catch (err) {
         console.error('Failed to load assets', err);
       }
@@ -164,8 +260,8 @@ export default function Page() {
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', background: '#1A0D14', color: '#FCE4EC', overflow: 'hidden' }}>
       {/* Sidebar */}
-      <aside style={{ width: 240, borderRight: '1px solid #3A1C2B', padding: 16, background: '#2A1520', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 'bold', margin: '0 0 8px 0', color: '#E8447A' }}>Organs</h2>
+      <aside style={{ width: 220, borderRight: '1px solid #3A1C2B', padding: 16, background: '#2A1520', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 'bold', margin: '0 0 10px 0', color: '#E8447A' }}>Organs</h2>
         {visibleOrgans.map((name) => (
           <button
             key={name}
@@ -178,16 +274,17 @@ export default function Page() {
             }}
             style={{
               textAlign: 'left',
-              padding: '8px 12px',
+              padding: '7px 10px',
               borderRadius: 4,
               background: selectedOrgan === name ? '#E8447A' : 'transparent',
               color: selectedOrgan === name ? '#FFFFFF' : '#FCE4EC',
               border: '1px solid #3A1C2B',
               cursor: 'pointer',
+              fontSize: 13,
               textTransform: 'capitalize',
             }}
           >
-            {name.replace('_', ' ')}
+            {name.replace(/_/g, ' ')}
           </button>
         ))}
         <div style={{ marginTop: 'auto', fontSize: 10, color: '#C9A9B4', borderTop: '1px solid #3A1C2B', paddingTop: 8 }}>
@@ -195,25 +292,27 @@ export default function Page() {
         </div>
       </aside>
 
-      {/* Grid Layout: 3D Top-Left, 2D Slices in remaining quadrants */}
+      {/* Grid */}
       <main style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: 2, background: '#3A1C2B' }}>
         <div style={{ background: '#1A0D14', position: 'relative' }}>
-          <Canvas camera={{ position: [0, 0, 450], fov: 45 }}>
-            <ambientLight intensity={0.7} />
-            <directionalLight position={[100, 100, 100]} intensity={1} />
+          <Canvas camera={{ position: [0, 0, 350], fov: 45 }}>
+            <ambientLight intensity={1.8} />
+            <directionalLight position={[100, 100, 100]} intensity={2.5} />
+            <directionalLight position={[-100, -100, -100]} intensity={1.5} />
+            <directionalLight position={[0, 200, 0]} intensity={1.5} />
             <OrbitControls />
             {meta && visibleOrgans.map((name) => (
               <OrganModel key={name} name={name} />
             ))}
           </Canvas>
-          <div style={{ position: 'absolute', top: 12, left: 12, fontSize: 18, color: '#E8447A' }}>
-            {selectedOrgan ? selectedOrgan.replace('_', ' ') : '3D View'}
+          <div style={{ position: 'absolute', top: 10, left: 10, fontSize: 16, color: '#E8447A' }}>
+            {selectedOrgan ? selectedOrgan.replace(/_/g, ' ') : '3D View'}
           </div>
         </div>
 
-        <SliceCanvas type="axial" ctBuffer={ctBuffer} labelsBuffer={labelsBuffer} />
-        <SliceCanvas type="coronal" ctBuffer={ctBuffer} labelsBuffer={labelsBuffer} />
-        <SliceCanvas type="sagittal" ctBuffer={ctBuffer} labelsBuffer={labelsBuffer} />
+        <SliceCanvas type="axial" ctBuffer={ctBuffer} />
+        <SliceCanvas type="coronal" ctBuffer={ctBuffer} />
+        <SliceCanvas type="sagittal" ctBuffer={ctBuffer} />
       </main>
     </div>
   );
