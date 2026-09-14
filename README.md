@@ -50,9 +50,6 @@ The explorer extracts and displays 8 core abdominal structures[cite: 1]:
 
 ---
 
-## Local Development
+## Disclaimer
 
-1. Clone the repository:
-   ```bash
-   git clone [https://github.com/](https://github.com/)<your-username>/ct-explorer.git
-   cd ct-explorer/web
+1. For educational and learning purposes only[cite: 1]. This software is not a medical device and should never be used for clinical diagnosis or treatment planning[cite: 1].
